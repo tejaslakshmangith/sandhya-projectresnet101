@@ -11,3 +11,4 @@ training_curves.png
 confusion_matrix.png
 __pycache__/
 *.pyc
+flask-backend/smartmine.db

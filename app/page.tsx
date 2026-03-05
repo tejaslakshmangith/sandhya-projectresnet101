@@ -7,6 +7,12 @@ import {
   type HealthStatus,
   type PredictionResult,
 } from "@/lib/ai";
+import {
+  createUser,
+  savePrediction,
+  sendChatMessage,
+  type ChatMessage,
+} from "@/lib/chat";
 
 // ---------------------------------------------------------------------------
 // Class colour map
@@ -93,6 +99,165 @@ function ConfidenceBar({
 }
 
 // ---------------------------------------------------------------------------
+// AI Chat Panel sub-component
+// ---------------------------------------------------------------------------
+
+const INITIAL_ASSISTANT_MSG: ChatMessage = {
+  role: "assistant",
+  content:
+    "Hi! I can answer questions about your mine-safety detection result. What would you like to know?",
+};
+
+function AIChatPanel({
+  userId,
+  predictionContext,
+}: {
+  userId: number | null;
+  predictionContext: PredictionResult | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_ASSISTANT_MSG]);
+  const [input, setInput] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to the latest message
+  useEffect(() => {
+    if (open) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, open]);
+
+  // Reset panel when prediction context changes
+  useEffect(() => {
+    setMessages([INITIAL_ASSISTANT_MSG]);
+    setChatError(null);
+    setInput("");
+  }, [predictionContext]);
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text || aiLoading) return;
+
+    const userMsg: ChatMessage = { role: "user", content: text };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setAiLoading(true);
+    setChatError(null);
+
+    try {
+      if (userId !== null) {
+        const response = await sendChatMessage(
+          userId,
+          text,
+          predictionContext ?? undefined,
+        );
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: response.reply },
+        ]);
+      } else {
+        // Flask backend not available — show a graceful fallback
+        throw new Error("User session not initialised. Is the Flask backend running?");
+      }
+    } catch (err: unknown) {
+      setChatError(
+        err instanceof Error ? err.message : "Failed to get AI response.",
+      );
+      setMessages((prev) => prev.slice(0, -1)); // remove optimistic user msg
+      setInput(text);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  return (
+    <div className="rounded-2xl bg-gray-900 border border-gray-800 overflow-hidden">
+      {/* Toggle header */}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-gray-800 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-lg">💬</span>
+          <span className="font-semibold text-white">Ask AI about this result</span>
+        </div>
+        <span className="text-gray-400 text-sm">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-gray-800">
+          {/* Message history */}
+          <div className="h-72 overflow-y-auto px-4 py-4 space-y-3 bg-gray-950">
+            {messages.map((msg, idx) => (
+              <div
+                key={idx}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${
+                    msg.role === "user"
+                      ? "bg-blue-600 text-white rounded-tr-sm"
+                      : "bg-gray-800 text-gray-200 rounded-tl-sm"
+                  }`}
+                >
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            {aiLoading && (
+              <div className="flex justify-start">
+                <div className="bg-gray-800 text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2 text-sm italic">
+                  AI is thinking…
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Error */}
+          {chatError && (
+            <div className="mx-4 my-2 rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2 text-red-300 text-xs">
+              <strong>Error: </strong>{chatError}
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="px-4 py-3 border-t border-gray-800 flex gap-2 bg-gray-900">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Ask a question about the result…"
+              disabled={aiLoading}
+              className="flex-1 rounded-xl bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white
+                placeholder:text-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+            <button
+              onClick={sendMessage}
+              disabled={aiLoading || !input.trim()}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-sm
+                font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -105,6 +270,28 @@ export default function SmartMinePage() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Guest user session (persisted in localStorage)
+  const [userId, setUserId] = useState<number | null>(null);
+
+  // Initialise guest user on first render (client-side only)
+  useEffect(() => {
+    const stored = localStorage.getItem("smartmine_user_id");
+    const parsedId = stored ? parseInt(stored, 10) : NaN;
+    if (!isNaN(parsedId) && parsedId > 0) {
+      setUserId(parsedId);
+      return;
+    }
+    const ts = Date.now();
+    createUser("Guest", `guest_${ts}@smartmine.local`)
+      .then((u) => {
+        localStorage.setItem("smartmine_user_id", String(u.id));
+        setUserId(u.id);
+      })
+      .catch(() => {
+        // Flask backend not available — continue without persistence
+      });
+  }, []);
 
   // Poll backend health on mount
   useEffect(() => {
@@ -146,6 +333,19 @@ export default function SmartMinePage() {
     try {
       const res = await predictImage(selectedFile);
       setResult(res);
+
+      // Persist prediction to Flask backend (best-effort)
+      if (userId) {
+        savePrediction(
+          userId,
+          selectedFile.name,
+          res.prediction,
+          res.confidence,
+          res.all_probabilities,
+        ).catch(() => {
+          // Ignore persistence errors — they don't affect the UI
+        });
+      }
     } catch (err: unknown) {
       setError(
         err instanceof Error
@@ -311,6 +511,11 @@ export default function SmartMinePage() {
             ))}
           </div>
         </div>
+      )}
+
+      {/* AI Chat Panel — shown after a prediction */}
+      {result && (
+        <AIChatPanel userId={userId} predictionContext={result} />
       )}
 
       {/* Footer */}
