@@ -5,3 +5,9 @@ coverage/
 *.log
 .env*
 !.env.example
+tsconfig.tsbuildinfo
+*.pth
+training_curves.png
+confusion_matrix.png
+__pycache__/
+*.pyc
