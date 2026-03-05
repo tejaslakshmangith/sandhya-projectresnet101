@@ -1,0 +1,5 @@
+{
+  "name": "SmartMine Ops",
+  "description": "AI-powered rock, mineral, and ore classification dashboard for smart mining operations, featuring Veo-powered site simulation.",
+  "requestFramePermissions": ["camera"]
+}
